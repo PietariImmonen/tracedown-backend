@@ -4,7 +4,7 @@ const { GraphQLError } = require('graphql')
 const { v1: uuid } = require('uuid')
 const mongoose = require('mongoose')
 mongoose.set('strictQuery', false)
-const Person = require('./models/person')
+const Feeling = require('./models/feeling')
 const jwt = require('jsonwebtoken')
 const User = require('./models/user')
 
@@ -29,23 +29,19 @@ const typeDefs = `
     city: String! 
   }
 
-  type Person {
+  type Feeling {
     name: String!
-    phone: String
-    address: Address!
-    id: ID!
+    positive: Boolean!
   }
 
   type Query {
-    personCount: Int!
-    allPersons: [Person!]!
-    findPerson(name: String!): Person
     me: User
   }
 
   type User {
     username: String!
-    friends: [Person!]!
+    password: String!
+    friends: [Feeling!]!
     id: ID!
   }
   
@@ -54,14 +50,13 @@ const typeDefs = `
   }
 
   type Mutation {
-    addPerson(
+    addFeeling(
       name: String!
-      phone: String
-      street: String!
-      city: String!
-    ): Person
+      positive: Boolean!
+    ): Feeling
     createUser(
       username: String!
+      password: String!
     ): User
     login(
       username: String!
@@ -73,31 +68,29 @@ const typeDefs = `
 
 const resolvers = {
   Query: {
-    personCount: async () => Person.collection.countDocuments(),
-    allPersons: async (root, args) => {
-      // filters missing
-      return Person.find({})
-    },
-    findPerson: async (root, args) => Person.findOne({ name: args.name }),
     me: (root, args, context) => {
       return context.currentUser
     },
   },
-  Person: {
-    address: (root) => {
-      return {
-        street: root.street,
-        city: root.city,
-      }
-    },
-  },
   Mutation: {
-    addPerson: async (root, args) => {
-      const person = new Person({ ...args })
+    addFeeling: async (root, args, context) => {
+      const feeling = new Feeling({ ...args })
+      const currentUser = context.currentUser
+      console.log(feeling)
+  
+      if (!currentUser) {
+        throw new GraphQLError('not authenticated', {
+          extensions: {
+            code: 'BAD_USER_INPUT',
+          }
+        })
+      }
       try {
-        await person.save()
+        await feeling.save()
+        currentUser.feelings = currentUser.feelings.concat(feeling)
+        await currentUser.save()
       } catch (error) {
-        throw new GraphQLError('Saving person failed', {
+        throw new GraphQLError('Saving user failed', {
           extensions: {
             code: 'BAD_USER_INPUT',
             invalidArgs: args.name,
@@ -105,11 +98,11 @@ const resolvers = {
           }
         })
       }
-
-      return person
+  
+      return feeling
     },
     createUser: async (root, args) => {
-      const user = new User({ username: args.username })
+      const user = new User({ username: args.username, password: args.password })
   
       return user.save()
         .catch(error => {
@@ -125,7 +118,7 @@ const resolvers = {
     login: async (root, args) => {
       const user = await User.findOne({ username: args.username })
   
-      if ( !user || args.password !== 'secret' ) {
+      if ( !user || args.password !== user.password ) {
         throw new GraphQLError('wrong credentials', {
           extensions: {
             code: 'BAD_USER_INPUT'
@@ -161,7 +154,7 @@ startStandaloneServer(server, {
         auth.substring(7), process.env.JWT_SECRET
       )
       const currentUser = await User
-        .findById(decodedToken.id).populate('friends')
+        .findById(decodedToken.id).populate('feelings')
       return { currentUser }
     }
   },
